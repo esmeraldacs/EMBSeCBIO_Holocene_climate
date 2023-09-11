@@ -1,0 +1,75 @@
+---
+title: "European_whole_dataset"
+output: html_document
+---
+
+Input SMPDS dataset (modern pollen)
+```{r}
+pollen <- read.csv("Input/Modern_Pollen_gdd_alpha_Tmin.csv")
+```
+
+
+#A function to get MTWA from MTCO and GDD0
+```{r}
+get_MTWA<-function(MTCO,GDD0){
+  if(!is.na(MTCO)&!is.na(GDD0)){
+    if(MTCO<0){
+      GDD0_rad<-GDD0*2*pi/365
+      if(!require(rootSolve)){ install.packages("rootSolve");library(rootSolve)}
+      #- GDD0 /Tmin = 2 {[(u/(1 - u)] cos-1 (-u) + ???[(1 + u)/(1 ?- u)]}.
+      tryCatch({
+        eq<-function(u) (2*(acos(-u)*u/(1-u)+sqrt((1+u)/(1-u))))-GDD0_rad/(-MTCO)
+        #curve(eq(x), -1, 1)
+        #u should be between -1 and 1
+        #u<-uniroot(eq,c(-1, 1))$root
+        u<-uniroot(eq,c(-1+10^(-10), 1-10^(-10)))$root
+        
+        #Tmax = T0 + ??T =  - Tmin (1+u)/(1 - u)
+        MTWA<- (-MTCO)*(1+u)/(1-u)
+      }, error=function(e){MTWA<-NA}
+      )
+      
+    }else{
+      T0<-GDD0/365
+      MTWA<-2*T0-MTCO
+    }
+  }else{
+    MTWA<-NA
+  }
+  
+  return(MTWA)
+}
+```
+
+
+#get MTWA
+```{r}
+for(i in 1:nrow(pollen)){
+  #i=i+1
+  pollen[i,"Tmax"]<-get_MTWA(MTCO=pollen[i,"Tmin"],GDD0=pollen[i,"gdd"])
+}
+#summary(pollen$Tmax);hist(pollen$Tmax)
+```
+
+
+```{r}
+train_set_amg <- pollen |>
+  dplyr::select(-X) |>
+  dplyr::filter(Long>=-25 & Long<=62, Lat>=28&Lat<=75) |>
+  dplyr::select(Entity.name:alpha,Tmax, everything()) |>
+  select(-Entity.name) |>
+  group_by(Lat,Long) %>% 
+  dplyr::summarise_all(mean) %>% 
+  ungroup() |>
+  mutate(Entity.name=paste0("ID_",row_number())) |>
+  select(Entity.name,everything())
+```
+
+
+```{r}
+write.csv(train_set_amg, "Input/train_set_amg.csv")
+```
+
+
+
+

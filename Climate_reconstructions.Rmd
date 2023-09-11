@@ -1,0 +1,233 @@
+---
+title: "fxTWAPLS2 climate reconstruction"
+output: html_document
+---
+
+
+```{r}
+#You can install the released version of fxTWAPLS from CRAN with:
+install.packages("fxTWAPLS")
+```
+
+
+#Input data
+1. Modern pollen for trainning the model
+2. Fossil pollen
+```{r}
+modern_pollen <- read.csv("Input/train_set_amg.csv")
+fossil_pollen <- read.csv("Input/pollen_proportions.csv")
+```
+
+
+#Obtain modern pollen taxa
+```{r}
+#the start and end taxa are Abies and Zygophyllaceae in the modern pollen dataset
+taxaColMin <- which(colnames(modern_pollen) == "Abies")
+taxaColMax <- which(colnames(modern_pollen) == "Zygophyllaceae")
+taxa <- modern_pollen[, taxaColMin:taxaColMax]
+```
+
+
+# Use fxTWAPLSv2 to train
+```{r}
+# MTCO
+fit_tf_Tmin <- fxTWAPLS::TWAPLS.w2(taxa, modern_pollen$Tmin, nPLS = 5, usefx = TRUE, fx_method="pspline",bin=0.02)
+
+# GDD0
+fit_tf_gdd <- fxTWAPLS::TWAPLS.w2(taxa, modern_pollen$gdd, nPLS = 5, usefx = TRUE, fx_method="pspline",bin=20)
+
+# alpha
+fit_tf_alpha <- fxTWAPLS::TWAPLS.w2(taxa, modern_pollen$alpha, nPLS = 5, usefx = TRUE, fx_method="pspline",bin=0.002)
+
+#MTWA
+fit_tf_Tmax <- fxTWAPLS::TWAPLS.w2(taxa, modern_pollen$Tmax, nPLS = 5, usefx = TRUE, fx_method="pspline",bin=0.02)
+```
+
+
+# Cross validation (pseudo removed leave out cross validation)
+# Get the distance between each point
+```{r}
+# Get the location information of each sample
+point <- modern_pollen[, c("Long", "Lat")]
+# Get the distance between each point
+dist <- fxTWAPLS::get_distance(point, cpus = 8)
+# Set CPUS to run in parallel
+CPUS<-4
+
+# Get the pseudo sites (which are both geographically close and climatically
+# close to the test site) which should be removed in cross validation
+pseudo_Tmin <- fxTWAPLS::get_pseudo(dist, modern_pollen$Tmin, cpus = CPUS)
+pseudo_gdd <- fxTWAPLS::get_pseudo(dist, modern_pollen$gdd, cpus = CPUS)
+pseudo_alpha <- fxTWAPLS::get_pseudo(dist, modern_pollen$alpha, cpus = CPUS)
+pseudo_Tmax <- fxTWAPLS::get_pseudo(dist, modern_pollen$Tmax, cpus = CPUS)
+
+rlist::list.save(pseudo_Tmin, 'pseudo_Tmin.rdata')
+rlist::list.save(pseudo_gdd, 'pseudo_gdd.rdata')
+rlist::list.save(pseudo_alpha, 'pseudo_alpha.rdata')
+rlist::list.save(pseudo_Tmax, 'pseudo_Tmax.rdata')
+
+
+pseudo_Tmin <- rlist::list.load('pseudo_Tmin.rdata')
+pseudo_gdd <- rlist::list.load('pseudo_gdd.rdata')
+pseudo_alpha <- rlist::list.load('pseudo_alpha.rdata')
+pseudo_Tmax <- rlist::list.load('pseudo_Tmax.rdata')
+
+
+# Leave-out cross validation
+`%>%` <- magrittr::`%>%`
+if(!require(foreach)){install.packages("foreach");library(foreach)}
+cv_tf2_Tmin_pspline <- fxTWAPLS::cv.pr.w(taxa,
+                                         modern_pollen$Tmin,
+                                         nPLS = 5,
+                                         fxTWAPLS::TWAPLS.w2,
+                                         fxTWAPLS::TWAPLS.predict.w,
+                                         pseudo_Tmin,
+                                         usefx = TRUE,
+                                         fx_method = "pspline",
+                                         bin = 0.02,
+                                         cpus = 8,
+                                         test_mode = F)  %>% fxTWAPLS::pb()  
+write.csv(cv_tf2_Tmin_pspline, "Output_train_amg/cv_tf2_Tmin_pspline.csv")
+
+cv_tf2_gdd_pspline <- fxTWAPLS::cv.pr.w(taxa,
+                                        modern_pollen$gdd,
+                                        nPLS = 5,
+                                        fxTWAPLS::TWAPLS.w2,
+                                        fxTWAPLS::TWAPLS.predict.w,
+                                        pseudo_gdd,
+                                        usefx = TRUE,
+                                        fx_method = "pspline",
+                                        bin = 20,
+                                        cpus = 8,
+                                        test_mode = F)   %>% fxTWAPLS::pb()  
+write.csv(cv_tf2_gdd_pspline, "Output_train_amg/cv_tf2_gdd_pspline.csv")
+
+cv_tf2_alpha_pspline <- fxTWAPLS::cv.pr.w(taxa,
+                                          modern_pollen$alpha,
+                                          nPLS = 5,
+                                          fxTWAPLS::TWAPLS.w2,
+                                          fxTWAPLS::TWAPLS.predict.w,
+                                          pseudo_alpha,
+                                          usefx = TRUE,
+                                          fx_method = "pspline",
+                                          bin = 0.002,
+                                          cpus = 8,
+                                          test_mode = F)   %>% fxTWAPLS::pb()  
+write.csv(cv_tf2_alpha_pspline, "Output_train_amg/cv_tf2_alpha_pspline.csv")
+
+cv_tf2_Tmax_pspline <- fxTWAPLS::cv.pr.w(taxa,
+                                         modern_pollen$Tmax,
+                                         nPLS = 5,
+                                         fxTWAPLS::TWAPLS.w2,
+                                         fxTWAPLS::TWAPLS.predict.w,
+                                         pseudo_Tmax,
+                                         usefx = TRUE,
+                                         fx_method = "pspline",
+                                         bin = 0.02,
+                                         cpus = 8,
+                                         test_mode = F)   %>% fxTWAPLS::pb()  
+write.csv(cv_tf2_Tmax_pspline, "Output_train_amg/cv_tf2_Tmax_pspline.csv")
+
+# Random t test to the cross validation result
+rand_tf2_Tmin_pspline <- fxTWAPLS::rand.t.test.w(cv_tf2_Tmin_pspline, n.perm = 999) 
+rand_tf2_alpha_pspline <- fxTWAPLS::rand.t.test.w(cv_tf2_alpha_pspline, n.perm = 999) 
+rand_tf2_Tmax_pspline <- fxTWAPLS::rand.t.test.w(cv_tf2_Tmax_pspline, n.perm = 999) 
+rand_tf2_gdd_pspline <- fxTWAPLS::rand.t.test.w(cv_tf2_gdd_pspline, n.perm = 999) 
+```
+
+
+
+
+#Output table from cross validation results.
+In EMBSeCBIO case the last last significant number of components (the number of components to be usedis 4 for MTCO, 2 for GDD0, 3 for alpha, and 4 for MTWA.
+```{r}
+rand_tf2_pspline<-rbind.data.frame(rand_tf2_Tmin_pspline,rand_tf2_Tmax_pspline,rand_tf2_alpha_pspline,rand_tf2_gdd_pspline)# |> mutate(n_comp=rep(seq(1,5,1),times=4))
+
+write.csv(rand_tf2_pspline, "Output_train_amg/rand_tf2_pspline.csv")
+```
+
+
+
+# Reconstruction
+```{r}
+#Extract fossil taxa, the start and end taxa are Abies and Zygophyllaceae in my fossil dataset
+taxaColMin <- which(colnames(fossil_pollen) == "Abies")
+taxaColMax <- which(colnames(fossil_pollen) == "Zygophyllaceae")
+core0<-fossil_pollen[,taxaColMin:taxaColMax]
+core0[is.na(core0)]<-0;str(core0)
+core<-core0
+
+#get common taxa
+colnames(core)[!(colnames(core)%in% colnames(taxa))] #taxa that are in fossil data but not exist in modern data
+colnames(taxa)[!(colnames(taxa)%in% colnames(core))] #taxa that are in modern data but not exist in fossil data
+
+colnames(core)[(colnames(core)%in% colnames(taxa))]
+```
+
+
+
+```{r}
+#delete taxa that are in fossil data but not exist in modern data
+taxa_to_delete<-colnames(core)[!(colnames(core)%in% colnames(taxa))]
+core[,taxa_to_delete]<-NULL
+#add taxa that are in modern data but not exist in fossil data and attribute them to 0
+taxa_to_add<-colnames(taxa)[!(colnames(taxa)%in% colnames(core))]
+core[,taxa_to_add]<-0
+core<-core[,order(colnames(core))]
+
+#recalculate the relative abundance
+summary(rowSums(core))
+core<-core/rowSums(core)
+summary(rowSums(core))
+str(core)
+```
+
+
+
+#Reconstruct the past climates
+```{r}
+#MTCO
+fossil_tf_Tmin<-fxTWAPLS::TWAPLS.predict.w(fit_tf_Tmin,core)
+#GDD0
+fossil_tf_gdd<-fxTWAPLS::TWAPLS.predict.w(fit_tf_gdd,core)
+#alpha
+fossil_tf_alpha<-fxTWAPLS::TWAPLS.predict.w(fit_tf_alpha,core)
+#MTWA
+fossil_tf_Tmax<-fxTWAPLS::TWAPLS.predict.w(fit_tf_Tmax,core)
+
+#Use the last significant number of components
+core_sig<-cbind.data.frame(fossil_pollen[,c("entity_name","latitude","longitude","elevation","age")],
+                           fossil_tf_Tmin[["fit"]][,4],fossil_tf_gdd[["fit"]][,2],fossil_tf_alpha[["fit"]][,2], fossil_tf_Tmax[["fit"]][,2])
+
+colnames(core_sig)<-c("site","lat","lon","elv","age","Tmin_pred","gdd_pred","alpha_pred","Tmax_pred")
+
+write.csv(core_sig,"Output_train_amg/Train_amg_fossil_reconstruction_without_sse.csv")
+
+
+# Get the sample specific errors
+
+`%>%` <- magrittr::`%>%`
+#MTCO
+sse_tf_Tmin<-fxTWAPLS::sse.sample(modern_taxa=taxa,modern_climate=modern_pollen$Tmin,fossil_taxa=core,trainfun=fxTWAPLS::TWAPLS.w2,predictfun=fxTWAPLS::TWAPLS.predict.w,
+                                  nboot=1000,nPLS=5,nsig=4,usefx=TRUE,fx_method = "pspline",bin=0.02)%>%fxTWAPLS::pb()
+#GDD0
+sse_tf_gdd<-fxTWAPLS::sse.sample(modern_taxa=taxa,modern_climate=modern_pollen$gdd,fossil_taxa=core,trainfun=fxTWAPLS::TWAPLS.w2,predictfun=fxTWAPLS::TWAPLS.predict.w,
+                                 nboot=1000,nPLS=5,nsig=2,usefx=TRUE,fx_method = "pspline",bin=20)%>%fxTWAPLS::pb()
+#alpha
+sse_tf_alpha<-fxTWAPLS::sse.sample(modern_taxa=taxa,modern_climate=modern_pollen$alpha,fossil_taxa=core,trainfun=fxTWAPLS::TWAPLS.w2,predictfun=fxTWAPLS::TWAPLS.predict.w,
+                                   nboot=1000,nPLS=5,nsig=2,usefx=TRUE,fx_method = "pspline",bin=0.002)%>%fxTWAPLS::pb()
+#MTWA
+sse_tf_Tmax<-fxTWAPLS::sse.sample(modern_taxa=taxa,modern_climate=modern_pollen$Tmax,fossil_taxa=core,trainfun=fxTWAPLS::TWAPLS.w2,predictfun=fxTWAPLS::TWAPLS.predict.w,
+                                  nboot=1000,nPLS=5,nsig=2,usefx=TRUE,fx_method = "pspline",bin=0.02)%>%fxTWAPLS::pb()
+
+
+
+# Final output
+sse_core_sig<-cbind.data.frame(sse_tf_Tmin,sse_tf_gdd,sse_tf_alpha,sse_tf_Tmax)
+colnames(sse_core_sig)<-c("Tmin_sse","gdd_sse","alpha_see","Tmax_see")
+
+reconstruction_output <- dplyr::bind_cols(core_sig,sse_core_sig)
+
+write.csv(reconstruction_output,"Output_train_amg/Train_amg_reconstruction_output.csv")
+```
+
