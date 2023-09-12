@@ -2,7 +2,7 @@
 
 Code related to the paper titled: 
 
-## *"Pollen-based reconstructions of Holocene climate trends in the eastern Mediterranean region".*
+## **"Pollen-based reconstructions of Holocene climate trends in the eastern Mediterranean region".**
 
 The paper can be accessed at the following link: https://egusphere.copernicus.org/preprints/2023/egusphere-2023-864/
 
