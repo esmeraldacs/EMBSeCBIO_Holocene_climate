@@ -1,0 +1,465 @@
+---
+title: "Nuevo plot"
+output: html_document
+date: "2022-10-14"
+---
+
+
+```{r}
+`%$%` <- magrittr::`%$%`
+library(tidyverse)
+```
+
+
+Input files
+```{r}
+embs <- read.csv("Output_data/Train_amg_reconstruction_output.csv") 
+hill <- read.csv("Input/pollen_proportions_and_Hilln.csv") |> select(hill_n2)
+embs <- bind_cols(embs,hill) |> filter(!is.na(alpha_sse))
+```
+
+
+Renaming variables
+```{r}
+clim0 <- embs |>
+  select(site:age,hill_n2,Tmin_pred,gdd_pred,Tmax_pred,alpha_pred,Tmin_sse,gdd_sse,Tmax_sse,alpha_sse) |>
+  rename(latitude = lat,
+         longitude = lon,
+         elevation = elv,
+         mtco = Tmin_pred,
+         mtco_sse = Tmin_sse,
+         alpha = alpha_pred,
+         mtwa = Tmax_pred,
+         mtwa_sse = Tmax_sse,
+         gdd = gdd_pred) 
+```
+
+
+Filter samples with a Hill diversity number higher or equal to 2
+```{r}
+clim0 <- clim0 |>
+  filter(hill_n2 >= 2) |>
+  select(-hill_n2) |>
+  arrange(site,age)
+
+
+site_metadadata <- clim0 |>
+  select(site,latitude,longitude,elevation) |> distinct()
+```
+
+
+Reshaping the dataframe in preparation to filter outliers
+```{r}
+clim0 <- clim0 |> mutate(ID = paste0("ID_",row_number()))
+
+clim0_pred <- clim0 |>
+  pivot_longer(cols = !c(ID,site,latitude,longitude,elevation,age),names_to = "variable") |>
+  filter(variable%in%c("mtco","gdd","alpha","mtwa"))
+
+clim0_sse <- clim0 |>
+  pivot_longer(cols = !c(ID,site,latitude,longitude,elevation,age),names_to = "variable") |>
+  filter(variable%in%c("mtco_sse","gdd_sse","alpha_sse","mtwa_sse"))
+```
+
+
+A function to find ouliers in standar deviations
+```{r}
+find_outlier <- function(x) {
+  return(x < quantile(x, .5) - 1.5*IQR(x) | x > quantile(x, .95) + 1.5*IQR(x))
+}
+```
+
+
+Remove samples that are outliers
+```{r}
+#add new column to data frame that indicates if each observation is an outlier
+outliers_tag <- clim0_sse |>
+  group_by(variable) |>
+  mutate(sse_outlier = ifelse(find_outlier(value), value, NA)) |>
+  ungroup() |>
+  filter(is.na(sse_outlier)) |>
+  mutate(variable = str_replace(variable,"_sse","")) |>
+  select(-c(sse_outlier,value))
+
+clim <- outliers_tag |>
+  inner_join(clim0_pred, by=c("ID","site","latitude","longitude","elevation","age","variable")) #|>
+  #select(-ID)
+```
+
+
+Filter entities with modern age
+```{r}
+with_modern_age <- clim |>
+  group_by(variable, site) |>
+  mutate(age_min = case_when(age <= 300 ~ T)) |>
+  ungroup() |>
+  filter(age_min == T) |>
+  select(site) |>
+  distinct() |>
+  pull()
+
+pollens <- clim |> filter(site%in%with_modern_age) |>
+  pivot_wider(names_from = variable, values_from = value) |>
+  arrange(site,age)
+
+latitude_position <- clim |>
+  filter(site%in%with_modern_age) |>
+  select(site,latitude) |>
+  distinct() |>
+  arrange(desc(latitude)) |>
+  mutate(lat_position = row_number())
+```
+
+
+Correct alpha
+```{r}
+#Obtain modern CO2 from (Bereiter et al. 2015)
+modern_co2 <- tibble::tibble(age = 1950 - c(1961:1990),
+                             co2_init = purrr::map_dbl(age, codos::past_co2)) |>
+  dplyr::mutate(co2 =  median(co2_init)) |>
+  dplyr::select(co2) |> dplyr::distinct() |> dplyr::pull()
+
+embs0 <- pollens |> mutate(modern_co2 = modern_co2)
+```
+
+
+
+```{r}
+#Obtain past CO2 values
+entidades <- unique(embs0$site)
+embs1 <- data.frame()
+  for (i in entidades){
+    aux1 <- embs0 %>% 
+        filter(site == i) %$%
+        purrr::map_dbl(age, codos::past_co2)
+    
+    aux2 <- embs0 %>% 
+      filter(site == i) |>
+      mutate(paleo_co2 = aux1)
+               
+    embs1 <- bind_rows (embs1, aux2)
+  }
+```
+
+
+
+```{r}
+#Estimate past Tmean values
+embs2 <- embs1 |> dplyr::mutate(id=row_number())
+
+muestras <- unique(embs2$id)
+embs3 <- data.frame()
+  for (i in muestras){
+    aux1 <- embs2 |> filter(id == i) 
+    aux2 <- with(aux1, codos::int_sin(mtco, mtwa))
+    aux3 <- aux2[aux2 > 0] # Filter remperatures above 0°C
+    aux4 <- aux1 |> mutate(palaeo_MGS_temp = mean(aux3))
+    embs3 <- bind_rows (embs3, aux4)
+  }
+```
+
+
+Example plot
+```{r}
+a <- codos::int_sin(-12.10125354, 15.25460) #15.2540934 	
+#15.254093
+
+as_tibble(a) |>
+  mutate(day=c(365:1)) |>
+  filter(value > 0) |>
+  mutate(mean_gdd = mean(value))
+
+b <- as_tibble(a) |>
+  mutate(day=c(365:1))
+ 
+plot_mgs <- b |> 
+  ggplot(aes(x=day,y=value))+
+  geom_line() +
+  geom_hline(yintercept = 9.629978, linetype="dashed",size=0.65) +
+  geom_hline(yintercept = -12.10125354, colour="#fb607f",size=0.65) +
+  geom_hline(yintercept = 15.25460,colour="#1974D2",size=0.65) +
+  annotate("text", x = 60, y = ((-12.10125354)+0.8), label = "MTCO",colour="#fb607f",size=3) +
+  annotate("text", x = 60, y = ((15.25460)+0.8), label = "MTWA",colour="#1974D2",size=3) +
+  annotate("text", x = 60, y = ((9.629978)+0.8), label = "MGS (mean growing season)",size=3) +
+  labs(x="Days", y="Temperature (°C)",subtitle = "Site: Kismohos\nAge: 12.148 ky") +
+  scale_y_continuous(n.breaks = 10) +
+  theme(plot.subtitle = element_text(size=8),
+        axis.title = element_text(size=8),
+        axis.text = element_text(size=8),
+        #axis.title = element_blank(),
+        #axis.text = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_rect(color="transparent",fill = "transparent"),
+        panel.border = element_rect(colour="black",fill="transparent"))
+
+plot_mgs
+```
+
+```{r}
+ggsave(plot_mgs, filename = "Output_reconstruction_amg_resubmitt/MGS_sin_example.png",units = "cm",width = 12,height = 8.5)
+```
+
+
+
+Add modern MGS temperature obtained by averaging the youngest 300 years
+```{r}
+embs4 <- embs3 |>
+  group_by(site) |>
+  mutate(aux1 = case_when(age <= 300  ~ palaeo_MGS_temp)) |> #case_when(age <= min(age)+300  ~ value))
+  mutate(modern_MGS_temp = case_when(!is.na(aux1) ~ mean(aux1, na.rm = T))) |>
+  tidyr::fill(modern_MGS_temp, .direction = "updown") |>
+  ungroup() |>
+  select(-aux1)
+```
+
+
+Plot of Kismohos
+```{r}
+embs4 |>
+  filter(site=="Kismohos") |>
+  pivot_longer(cols = !c(site,latitude,longitude,elevation,age,ID,id)) |>
+  filter(name%in%c("mtco","mtwa","palaeo_MGS_temp")) |>  
+  ggplot() +
+  geom_line(aes(x=age,y=value, group=name,colour=name)) +
+  scale_colour_manual(values=c("mtco"="dodgerblue","mtwa"="firebrick","palaeo_MGS_temp"="mediumseagreen")) +
+  #geom_point(data=punto,aes(x=0, y=7.64817),size=4,colour="red") +
+  labs(title = "Kismohos")+
+  theme_test()
+```
+
+
+Correction of alpha
+```{r}
+embs5 <- embs4 |>
+  select(site,latitude,longitude,elevation,age,modern_MGS_temp,palaeo_MGS_temp,alpha,modern_co2,paleo_co2,ID,id) |>
+  drop_na() |>
+  mutate(alpha_pred_corr = codos::corrected_mi(Tc0 = modern_MGS_temp,
+                                       Tc1 = palaeo_MGS_temp,
+                                        MI = alpha,
+                                          ca0= modern_co2,
+                                          ca1 = paleo_co2))
+```
+
+
+
+Example plot
+```{r}
+embs5 |>
+  filter(site=="Kismohos") |>
+  pivot_longer(cols = !c(site,latitude,longitude,elevation,age,ID,id)) |>
+  filter(name%in%c("alpha","alpha_pred_corr")) |>  
+  mutate(name=case_when(name=="alpha_pred_corr" ~ "alpha corrected",
+                        name == "alpha" ~ "alpha predicted")) |>
+  ggplot() +
+  geom_line(aes(x=age,y=value, group=name,colour=name)) +
+  scale_colour_manual(values=c("alpha predicted"="dodgerblue","alpha corrected"="firebrick")) +
+ # geom_point(data=punto,aes(x=0, y=7.64817),size=4,colour="red") +
+  labs(title = "Kismohos", y= "alpha")+
+  theme_test()
+```
+
+
+```{r}
+alpha <- embs5 |> 
+  select(site,latitude,longitude,age,ID,alpha,alpha_pred_corr)
+
+
+pollens1 <- pollens |>
+  full_join(alpha,by=c("site","latitude","longitude","age","ID","alpha"))
+
+
+pollens1 <- pollens1 |>
+  pivot_longer(cols = !c(site,latitude,longitude,elevation,age,ID),names_to = "variable") |>
+  filter(!is.na(value)) |>
+  select(-ID)
+
+pollens1
+```
+
+
+
+```{r}
+value_anomaly <- pollens1 |>
+  group_by(variable,site) |>
+  mutate(aux1 = case_when(age <= 300  ~ value)) |> #case_when(age <= min(age)+300  ~ value))
+  mutate(modern_value = case_when(!is.na(aux1) ~ mean(aux1, na.rm = T))) |>
+  tidyr::fill(modern_value, .direction = "updown") |>
+  ungroup() |>
+  mutate(value_anomaly = value - modern_value) |>
+  select(variable,site,age,value, modern_value,value_anomaly)
+
+#write.csv(with_modern_age, "Output/sites_with_modern_samples_to_get_anomaly.csv")
+```
+
+
+
+#Produce windows
+```{r}
+clim1 <- data.frame()
+  for (i in seq(300,12300,150)){
+    aux1 <- value_anomaly %>% 
+        filter(age >= i - 300 & age <= i) |> 
+        mutate(bincentre= i - 150) 
+               
+    clim1 <- bind_rows (clim1, aux1)
+}
+```
+
+
+
+```{r}
+allmodels_binn <- clim1 |>
+  group_by(variable,site,bincentre) |>
+  add_tally(name = "sampls_x_bin") |>
+  filter(sampls_x_bin >= 2) |> #Filter windows with a minimum of two samples each.
+  mutate(anomaly_bin =  mean(value_anomaly)) |>
+  ungroup() |>
+  select(variable,site,bincentre,anomaly_bin) |>
+  distinct() 
+
+allmodels_mean <- allmodels_binn |>
+  group_by(variable,bincentre) |>
+  mutate(anomaly_mean = mean(anomaly_bin)) |>
+  ungroup() |>
+  select(variable,bincentre,anomaly_mean) |>
+  distinct()
+ 
+allmodels_binn |> 
+  ggplot(aes(x=bincentre,y=anomaly_bin,group=site,colour=variable)) +
+  geom_step(alpha=1,show.legend = F) +
+  facet_wrap(~variable, scales="free_y")
+
+allmodels_mean |>
+  ggplot(aes(x=bincentre, y=anomaly_mean,colour=variable))+
+  geom_step() +
+  facet_wrap(~variable, scales="free_y")
+```
+
+
+```{r}
+todos <- allmodels_binn |>
+  inner_join(site_metadadata,by = "site") |>
+  inner_join(latitude_position,by = c("site", "latitude")) |>
+  group_by(variable) |>
+  arrange(desc(lat_position)) |>
+  ungroup() |>
+  mutate(lat_position = fct_inorder(factor(lat_position, ordered=TRUE)))
+```
+
+
+```{r}
+data <-todos |>
+  filter(variable == "mtco")
+  
+plot_mtco <- data |>
+ggplot(aes(x=bincentre,y=lat_position,fill=anomaly_bin,colour=anomaly_bin)) +
+  geom_tile() +
+  scale_fill_stepsn(colors=c('#00407d', '#0084ff', 'white', "#fa3c4c",'#9f0411'),  values=scales::rescale(c(min(data$anomaly_bin), 0, max(data$anomaly_bin))),aesthetics = c("fill","colour"),breaks = c(-10,-5,-3,-2,-1,0,1,2,3,5,10))+
+  guides(color = "none")+
+  annotate("text", x = 11250, y = 12.8, label = "N",
+           fontface = "italic", color = "gray10", size = 3)+
+  geom_segment(aes(x = 11250, xend = 11250, y = 5.2, yend = 12),
+           colour = "gray10", size = 0.3, arrow = arrow(type="closed",length = unit(0.2, "cm")), arrow.fill="#B3B4B4")+
+  labs(x="Age (ka)",fill="MTCO (°C)")+
+  scale_x_continuous(expand = c(0,0), breaks = seq(0,12000,1000), labels = seq(0,12,1)) +
+  theme(panel.background = element_rect(fill="#B3B4B4",color="transparent"),#bcbcbc
+        panel.border = element_rect(fill="transparent",colour="black",size=0.5),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0,"cm"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        legend.position="bottom",
+        legend.box.margin = margin(t = 0,b=0,r=0,l=0),
+        legend.box.spacing = unit(0.05,"cm"),
+        legend.text = element_text(size = 8,angle = 60,vjust =1,hjust = 1),
+        legend.title = element_text(size=8,vjust = 0.85),
+        legend.key.width = unit(0.7,"cm"),
+        legend.title.align = 0) 
+
+plot_mtco
+```
+
+
+```{r}
+data <-todos |>
+  filter(variable == "mtwa")
+  
+plot_mtwa <- data |>
+ggplot(aes(x=bincentre,y=lat_position,fill=anomaly_bin,colour=anomaly_bin)) +
+  geom_tile() +
+  scale_fill_stepsn(colors=c('#00407d', '#0084ff', 'white', "#fa3c4c",'#9f0411'),  values=scales::rescale(c(min(data$anomaly_bin), 0, max(data$anomaly_bin))),aesthetics = c("fill","colour"),breaks = c(-5,-3,-2,-1,0,1,2,3,5,10))+
+  guides(color = "none")+
+  annotate("text", x = 11250, y = 12.8, label = "N",
+           fontface = "italic", color = "gray10", size = 3)+ #family="Book Antiqua"
+  geom_segment(aes(x = 11250, xend = 11250, y = 5.2, yend = 12),
+           colour = "gray10", size = 0.3, arrow = arrow(type="closed",length = unit(0.2, "cm")), arrow.fill="#B3B4B4")+
+  labs(x="Age (ka)",fill="MTWA (°C)")+
+  scale_x_continuous(expand = c(0,0), breaks = seq(0,12000,1000), labels = seq(0,12,1)) +
+  theme(panel.background = element_rect(fill="#B3B4B4",color="transparent"),#bcbcbc
+        panel.border = element_rect(fill="transparent",colour="black",size=0.5),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0,"cm"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        legend.position="bottom",
+        legend.box.margin = margin(t = 0,b=0,r=0,l=0),
+        legend.box.spacing = unit(0.05,"cm"),
+        legend.text = element_text(size = 8,angle = 60,vjust =1,hjust = 1),
+        legend.title = element_text(size=8,vjust = 0.85),
+        legend.key.width = unit(0.7,"cm"),
+        legend.title.align = 0) 
+
+plot_mtwa
+```
+
+
+```{r}
+data <-todos |>
+  filter(variable == "alpha_pred_corr")
+  
+plot_alpha <- data |>
+ggplot(aes(x=bincentre,y=lat_position,fill=anomaly_bin,colour=anomaly_bin)) +
+  geom_tile() +
+  scale_fill_stepsn(colors=c("#7d5f00","#e6b000","white", '#0084ff',"#00407d"),  values=scales::rescale(c(min(data$anomaly_bin), 0, max(data$anomaly_bin))),aesthetics = c("fill","colour"),breaks = c(-0.30,-0.25,-0.2,-0.15,-0.1,-0.05,0, 0.05, 0.1, 0.15,0.2, 0.25,0.30))+
+  guides(color = "none")+
+  annotate("text", x = 11286, y = 12.8-1.5, label = "N",
+           fontface = "italic", color = "gray10", size = 3)+
+  geom_segment(aes(x = 11286, xend = 11286, y = 5.2, yend = 12-1.5),
+           colour = "gray10", size = 0.3, arrow = arrow(type="closed",length = unit(0.2, "cm")), arrow.fill="#B3B4B4")+
+  labs(x="Age (ka)",fill="α")+
+  scale_x_continuous(expand = c(0,0), breaks = seq(0,12000,1000), labels = seq(0,12,1)) +
+  theme(panel.background = element_rect(fill="#B3B4B4",color="transparent"),#bcbcbc
+        panel.border = element_rect(fill="transparent",colour="black",size=0.5),
+        panel.grid = element_blank(),
+        panel.spacing = unit(0,"cm"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        legend.position="bottom",
+        legend.box.margin = margin(t = 0,b=0,r=0,l=0),
+        legend.box.spacing = unit(0.05,"cm"),
+        legend.text = element_text(size = 8,angle = 60,vjust =1,hjust = 1),
+        legend.title = element_text(size=8,vjust = 0.85),
+        legend.key.width = unit(0.9,"cm"),
+        legend.title.align = 0) 
+
+plot_alpha
+```
+
+```{r}
+ggsave(plot = plot_alpha, filename = "Output_figures/plot_alpha_corrected.png",units = "cm", height = 19.15,width = 8.2)
+```
+
+
+```{r}
+ggsave(plot = plot_mtco, filename = "Output_figures/plot_mtco.png",units = "cm", height = 19.15,width = 8.2)
+```
+
+
+```{r}
+ggsave(plot = plot_mtwa, filename = "Output_figures/plot_mtwa.png",units = "cm", height = 19.15,width = 8.2)
+```
+
+
