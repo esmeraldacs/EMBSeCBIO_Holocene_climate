@@ -1,6 +1,8 @@
 # EMBSeCBIO_Holocene_climate
 
-Code related to the paper titles "Pollen-based reconstructions of Holocene climate trends in the eastern Mediterranean region"
+Code related to the paper titles "Pollen-based reconstructions of Holocene climate trends in the eastern Mediterranean region".
+
+The paper can be accessed at the following link: https://egusphere.copernicus.org/preprints/2023/egusphere-2023-864/
 
 Esmeralda Cruz-Silva^1^, Sandy P. Harrison^1^, I. Colin Prentice, Elena Marinova, Patrick J. Bartlein, Hans Renssen, and Yurui Zhang
 
