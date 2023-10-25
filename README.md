@@ -1,6 +1,8 @@
 # EMBSeCBIO_Holocene_climate
 
-Code related to the paper titled: 
+[![DOI](https://zenodo.org/badge/690272980.svg)](https://zenodo.org/doi/10.5281/zenodo.10040707)
+
+Code of to the paper titled: 
 
 ## **Pollen-based reconstructions of Holocene climate trends in the eastern Mediterranean region.**
 
