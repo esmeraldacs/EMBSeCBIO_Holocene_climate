@@ -1,5 +1,6 @@
 # EMBSeCBIO_Holocene_climate
 
+The DOI of this code is:
 [![DOI](https://zenodo.org/badge/690272980.svg)](https://zenodo.org/doi/10.5281/zenodo.10040707)
 
 Code of to the paper titled: 
